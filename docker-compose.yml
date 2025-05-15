@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  jira-issue-ai-crawler:
+    image: alpine:3.19
+    container_name: jira-issue-ai-crawler
+    volumes:
+      - ./jira-issue-ai-crawler:/app/jira-issue-ai-crawler
+      - ./config.yaml:/app/config.yaml
+    working_dir: /app
+    command: ./jira-issue-ai-crawler
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
