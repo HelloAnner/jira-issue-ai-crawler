@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/anner/jira-issue-ai-crawler/pkg/ai"
@@ -48,20 +50,20 @@ func main() {
 	log.Printf("Starting Jira issue analysis service. Sync interval: %d minutes", cfg.Sync.Interval)
 
 	// Run first sync immediately
-	if err := syncIssues(jiraClient, analyzer, repo); err != nil {
+	if err := syncIssues(jiraClient, analyzer, repo, cfg); err != nil {
 		log.Printf("Initial sync failed: %v", err)
 	}
 
 	// Continue syncing periodically
-	for range ticker.C {
-		if err := syncIssues(jiraClient, analyzer, repo); err != nil {
-			log.Printf("Sync failed: %v", err)
-		}
-	}
+	// for range ticker.C {
+	// if err := syncIssues(jiraClient, analyzer, repo); err != nil {
+	// 	log.Printf("Sync failed: %v", err)
+	// }
+	// }
 }
 
-func syncIssues(jiraClient *jira.Client, analyzer *ai.Analyzer, repo *database.Repository) error {
-	issues, err := jiraClient.GetIssues("project = YourProject AND updated >= -7d")
+func syncIssues(jiraClient *jira.Client, analyzer *ai.Analyzer, repo *database.Repository, cfg *config.Config) error {
+	issues, err := jiraClient.GetIssues("text ~ '定时调度' and type  = 客户BUG and createdDate >= 2025-01-01")
 	if err != nil {
 		return err
 	}
@@ -72,41 +74,43 @@ func syncIssues(jiraClient *jira.Client, analyzer *ai.Analyzer, repo *database.R
 	for _, issue := range issues {
 		existing, err := repo.FindByJiraKey(issue.Key)
 		if err == nil && existing != nil {
-			// Skip if we already have this issue and it hasn't been resolved yet
-			if existing.ResolvedAt.IsZero() && issue.ResolvedAt.IsZero() {
-				continue
-			}
+			fmt.Printf("issue %s already exists\n", issue.Key)
+			continue
 		}
 
+		log.Printf("Analyzing issue %s", issue.Key)
+
 		analysis, err := analyzer.AnalyzeIssue(ctx, &issue)
+
+		// 补充其他维度的字段
+
 		if err != nil {
 			log.Printf("Failed to analyze issue %s: %v", issue.Key, err)
 			continue
 		}
 
-		dbAnalysis := &database.IssueAnalysis{
-			JiraURL:              issue.URL,                     // 链接
-			JiraKey:              issue.Key,                     // 工单号
-			IssueTitle:           issue.Title,                   // 工单标题
-			CreatedAt:            issue.CreatedAt,               // 创建时间
-			ResolvedAt:           issue.ResolvedAt,              // 解决时间
-			ResponsibleDev:       issue.Dev,                     // 开发负责人
-			ResponsibleQA:        issue.QA,                      // 测试负责人
-			ModuleCategory:       analysis.ModuleCategory,       // 模块分类
-			OLALevel:             analysis.OLALevel,             // OLA等级
-			IsOverdue:            analysis.IsOverdue,            // 是否逾期
-			SymptomCategory:      analysis.SymptomCategory,      // 症状分类
-			SymptomDescription:   analysis.SymptomDescription,   // 症状描述
-			RootCauseCategory:    analysis.RootCauseCategory,    // 根因分类
-			RootCauseDescription: analysis.RootCauseDescription, // 根因描述
-			SolutionCategory:     analysis.SolutionCategory,     // 解决方案分类
-			SolutionDescription:  analysis.SolutionDescription,  // 解决方案描述
-			IsClosed:             analysis.IsClosed,             // 是否关闭
-			IsFixed:              analysis.IsFixed,              // 是否修复
-			DefectType:           analysis.DefectType,           // 缺陷类型
-			TechnicalDebtDesc:    analysis.TechnicalDebtDesc,    // 技术债务描述
-			IndustrySolution:     analysis.IndustrySolution,     // 行业解决方案
-			GapAnalysis:          analysis.GapAnalysis,          // 差距分析
+		dbAnalysis := &database.ConsumerIssue{
+			JiraURL:              cfg.Jira.URL + "/browse/" + issue.Key, // 链接
+			JiraKey:              issue.Key,                             // 工单号
+			IssueTitle:           issue.Title,                           // 工单标题
+			ResponsibleDev:       issue.Dev,                             // 开发负责人
+			ResponsibleQA:        issue.QA,                              // 测试负责人
+			ModuleCategory:       analysis.ModuleCategory,               // 模块分类
+			SymptomCategory:      analysis.SymptomCategory,              // 症状分类
+			SymptomDescription:   analysis.SymptomDescription,           // 症状描述
+			RootCauseCategory:    analysis.RootCauseCategory,            // 根因分类
+			RootCauseDescription: analysis.RootCauseDescription,         // 根因描述
+			SolutionCategory:     analysis.SolutionCategory,             // 解决方案分类
+			SolutionDescription:  analysis.SolutionDescription,          // 解决方案描述
+			IsClosed:             analysis.IsClosed,                     // 是否关闭
+			IsFixed:              analysis.IsFixed,                      // 是否修复
+			DefectType:           analysis.DefectType,                   // 缺陷类型
+			TechnicalDebtDesc:    analysis.TechnicalDebtDesc,            // 技术债务描述
+			IndustrySolution:     analysis.IndustrySolution,             // 行业解决方案
+			GapAnalysis:          analysis.GapAnalysis,                  // 差距分析
+			OriginalDescription:  issue.Description,                     // 原始描述
+			OriginalComments:     strings.Join(issue.Comments, "\n"),    // 原始评论
+			OriginalWorkLogs:     strings.Join(issue.WorkLogs, "\n"),    // 原始工作日志
 		}
 
 		if err := repo.CreateOrUpdate(dbAnalysis); err != nil {

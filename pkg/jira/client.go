@@ -7,17 +7,17 @@ import (
 )
 
 type Issue struct {
-	URL           string
-	Key           string
-	Title         string
-	CreatedAt     time.Time
-	ResolvedAt    time.Time
-	Dev           string
-	QA            string
-	Description   string
-	Comments      []string
-	WorkLogs      []string
-	CustomFields  map[string]interface{}
+	URL           string // 链接
+	Key           string // 工单号
+	Title         string // 工单标题
+	CreatedAt     time.Time // 创建时间
+	ResolvedAt    time.Time // 解决时间
+	Dev           string // 开发负责人
+	QA            string // 测试负责人
+	Description   string // 工单描述	
+	Comments      []string // 评论
+	WorkLogs      []string // 工作日志
+	CustomFields  map[string]interface{} // 自定义字段
 }
 
 type Client struct {
@@ -68,20 +68,7 @@ func (c *Client) GetIssues(jql string) ([]Issue, error) {
 			Description:  item.Fields.Description,
 			CustomFields: make(map[string]interface{}),
 		}
-
-		// Parse created time
-		createdTime, err := time.Parse("2006-01-02T15:04:05.999-0700", item.Fields.Created)
-		if err == nil {
-			issue.CreatedAt = createdTime
-		}
-
-		// Parse resolution time
-		if resolutionDate := item.Fields.Resolutiondate.String(); resolutionDate != "" {
-			if resolvedTime, err := time.Parse("2006-01-02T15:04:05.999-0700", resolutionDate); err == nil {
-				issue.ResolvedAt = &resolvedTime
-			}
-		}
-
+		
 		if item.Fields.Assignee != nil {
 			issue.Dev = item.Fields.Assignee.DisplayName
 		}
@@ -122,19 +109,6 @@ func (c *Client) GetIssues(jql string) ([]Issue, error) {
 				Title:        item.Fields.Summary,
 				Description:  item.Fields.Description,
 				CustomFields: make(map[string]interface{}),
-			}
-
-			// Parse created time
-			createdTime, err := time.Parse("2006-01-02T15:04:05.999-0700", item.Fields.Created)
-			if err == nil {
-				issue.CreatedAt = createdTime
-			}
-
-			// Parse resolution time
-			if resolutionDate := item.Fields.Resolutiondate; resolutionDate != "" {
-				if resolvedTime, err := time.Parse("2006-01-02T15:04:05.999-0700", resolutionDate); err == nil {
-					issue.ResolvedAt = &resolvedTime
-				}
 			}
 
 			if item.Fields.Assignee != nil {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"regexp"
 
 	"github.com/anner/jira-issue-ai-crawler/pkg/jira"
 	"github.com/tmc/langchaingo/llms"
@@ -13,8 +13,6 @@ import (
 
 type Analysis struct {
 	ModuleCategory       string `json:"module_category"`            // 模块分类
-	OLALevel             string `json:"ola_level"`                  // 确定OLA级别
-	IsOverdue            bool   `json:"is_overdue"`                 // 是否逾期
 	SymptomCategory      string `json:"symptom_category"`           // 症状分类
 	SymptomDescription   string `json:"symptom_description"`        // 症状描述
 	RootCauseCategory    string `json:"root_cause_category"`        // 根因分类
@@ -43,6 +41,8 @@ func NewAnalyzer(apiKey, model, baseURL string) (*Analyzer, error) {
 		return nil, fmt.Errorf("failed to create OpenAI client: %v", err)
 	}
 
+	fmt.Printf("baseURL: %s , model: %s\n", baseURL, model)
+
 	return &Analyzer{
 		llm: llm,
 	}, nil
@@ -52,12 +52,10 @@ func (a *Analyzer) AnalyzeIssue(ctx context.Context, issue *jira.Issue) (*Analys
 	content := []llms.MessageContent{
 		llms.TextParts(
 			llms.ChatMessageTypeSystem,
-			`你是经验丰富的系统分析师。分析Jira问题详情并提供结构化分析。
+			`你是经验丰富的系统分析师。分析Jira问题详情并提供结构化分析。所有维度均需要深入分析,详细给出描述。
 你的响应应该符合以下JSON结构：
 {
     "module_category": "string - 模块分类",
-    "ola_level": "string - 确定OLA级别",
-    "is_overdue": "boolean - 是否逾期",
     "symptom_category": "string - 症状分类",
     "symptom_description": "string - 症状描述",
     "root_cause_category": "string - 根因分类",
@@ -75,12 +73,23 @@ func (a *Analyzer) AnalyzeIssue(ctx context.Context, issue *jira.Issue) (*Analys
 	}
 
 	result, err := a.llm.GenerateContent(ctx, content, llms.WithMaxTokens(2048))
+
+	fmt.Printf("result: %s\n", result.Choices[0].Content)
+
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI API error: %v", err)
 	}
 
+	jsonContent, err := extractJSONContent(result.Choices[0].Content)
+
+	fmt.Printf("jsonContent: %s\n", jsonContent)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract JSON content: %v", err)
+	}
+
 	var analysis Analysis
-	err = json.Unmarshal([]byte(result.Choices[0].Content), &analysis)
+	err = json.Unmarshal([]byte(jsonContent), &analysis)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse AI response: %v", err)
 	}
@@ -94,14 +103,10 @@ func buildPrompt(issue *jira.Issue) string {
 工单号: %s
 描述: %s
 创建时间: %s
-任务解决过程中的评论: %s
-任务解决过程中的工作日志: %s
 `, issue.Title,
 		issue.Key,
 		issue.Description,
 		issue.CreatedAt.Format("2006-01-02"),
-		strings.Join(issue.Comments, "\n"),
-		strings.Join(issue.WorkLogs, "\n"),
 	)
 
 	if !issue.ResolvedAt.IsZero() {
@@ -123,4 +128,30 @@ func buildPrompt(issue *jira.Issue) string {
 	}
 
 	return prompt
+}
+
+// extractJSONContent 使用正则表达式从文本中提取JSON内容
+func extractJSONContent(content string) (string, error) {
+	// 定义JSON匹配的正则表达式
+	re := regexp.MustCompile(`(?s)\{.*\}`)
+	
+	// 查找匹配的JSON内容
+	match := re.FindString(content)
+	if match == "" {
+		return "", fmt.Errorf("no JSON content found in the response")
+	}
+
+	// 验证提取的内容是否为有效的JSON
+	var js map[string]interface{}
+	if err := json.Unmarshal([]byte(match), &js); err != nil {
+		return "", fmt.Errorf("extracted content is not valid JSON: %v", err)
+	}
+
+	// 返回格式化后的JSON字符串
+	formattedJSON, err := json.MarshalIndent(js, "", "    ")
+	if err != nil {
+		return match, nil // 如果格式化失败，返回原始匹配内容
+	}
+
+	return string(formattedJSON), nil
 }

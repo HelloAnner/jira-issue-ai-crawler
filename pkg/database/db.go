@@ -16,8 +16,8 @@ func NewConnection(host string, port int, username, password, database string) (
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	err = db.AutoMigrate(&IssueAnalysis{})
-	
+	err = db.AutoMigrate(&ConsumerIssue{})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to migrate database schema: %v", err)
 	}

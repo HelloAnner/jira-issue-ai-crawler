@@ -1,0 +1,21 @@
+jira:
+  url: ""
+  username: ""
+  password: ""
+
+ai:
+  base_url: "https://api.deepseek.com/v1"
+  api_key: ""
+  model: "deepseek-chat"
+  temperature: 0.5
+
+db:
+  host: "127.0.0.1"
+  port: 3306
+  username: "root"
+  password: "1001"
+  database: "jira"
+
+sync:
+  interval: 10 # 单位 min
+
