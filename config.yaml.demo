@@ -2,6 +2,7 @@ jira:
   url: ""
   username: ""
   password: ""
+  jql: ""
 
 ai:
   base_url: "https://api.deepseek.com/v1"

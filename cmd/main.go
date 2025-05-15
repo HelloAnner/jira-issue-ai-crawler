@@ -6,7 +6,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/anner/jira-issue-ai-crawler/pkg/ai"
 	"github.com/anner/jira-issue-ai-crawler/pkg/config"
@@ -44,27 +43,16 @@ func main() {
 		log.Fatalf("Failed to create AI analyzer: %v", err)
 	}
 
-	// Start the sync loop
-	ticker := time.NewTicker(time.Duration(cfg.Sync.Interval) * time.Minute)
-	defer ticker.Stop()
-
 	log.Printf("Starting Jira issue analysis service. Sync interval: %d minutes", cfg.Sync.Interval)
 
 	// Run first sync immediately
 	if err := syncIssues(jiraClient, analyzer, repo, cfg); err != nil {
 		log.Printf("Initial sync failed: %v", err)
 	}
-
-	// Continue syncing periodically
-	// for range ticker.C {
-	// if err := syncIssues(jiraClient, analyzer, repo); err != nil {
-	// 	log.Printf("Sync failed: %v", err)
-	// }
-	// }
 }
 
 func syncIssues(jiraClient *jira.Client, analyzer *ai.Analyzer, repo *database.Repository, cfg *config.Config) error {
-	issues, err := jiraClient.GetIssues("text ~ '定时调度' and type  = 客户BUG and createdDate >= 2025-01-01")
+	issues, err := jiraClient.GetIssues(cfg.Jira.JQL)
 	if err != nil {
 		return err
 	}
