@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anner/jira-issue-ai-crawler/pkg/ai"
@@ -71,54 +72,88 @@ func syncIssues(jiraClient *jira.Client, analyzer *ai.Analyzer, repo *database.R
 	log.Printf("Found %d issues to analyze", len(issues))
 
 	ctx := context.Background()
+
+	// 创建任务通道
+	taskChan := make(chan jira.Issue, len(issues))
+	// 创建错误通道
+	errChan := make(chan error, len(issues))
+	// 创建等待组
+	var wg sync.WaitGroup
+
+	// 启动10个worker
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for issue := range taskChan {
+				// 检查issue是否已存在
+				existing, err := repo.FindByJiraKey(issue.Key)
+				if err == nil && existing != nil {
+					log.Printf("Worker %d: issue %s already exists", workerID, issue.Key)
+					continue
+				}
+
+				log.Printf("Worker %d: Analyzing issue %s", workerID, issue.Key)
+
+				analysis, err := analyzer.AnalyzeIssue(ctx, &issue)
+				if err != nil {
+					errChan <- fmt.Errorf("Worker %d failed to analyze issue %s: %v", workerID, issue.Key, err)
+					continue
+				}
+
+				dbAnalysis := &database.ConsumerIssue{
+					JiraURL:              cfg.Jira.URL + "/browse/" + issue.Key,
+					JiraKey:              issue.Key,
+					IssueTitle:           issue.Title,
+					ResponsibleDev:       issue.Dev,
+					ResponsibleQA:        issue.QA,
+					ModuleCategory:       analysis.ModuleCategory,
+					SymptomCategory:      analysis.SymptomCategory,
+					SymptomDescription:   analysis.SymptomDescription,
+					RootCauseCategory:    analysis.RootCauseCategory,
+					RootCauseDescription: analysis.RootCauseDescription,
+					SolutionCategory:     analysis.SolutionCategory,
+					SolutionDescription:  analysis.SolutionDescription,
+					IsClosed:             analysis.IsClosed,
+					IsFixed:              analysis.IsFixed,
+					DefectType:           analysis.DefectType,
+					TechnicalDebtDesc:    analysis.TechnicalDebtDesc,
+					IndustrySolution:     analysis.IndustrySolution,
+					GapAnalysis:          analysis.GapAnalysis,
+					OriginalDescription:  issue.Description,
+					OriginalComments:     strings.Join(issue.Comments, "\n"),
+					OriginalWorkLogs:     strings.Join(issue.WorkLogs, "\n"),
+				}
+
+				if err := repo.CreateOrUpdate(dbAnalysis); err != nil {
+					errChan <- fmt.Errorf("Worker %d failed to save analysis for issue %s: %v", workerID, issue.Key, err)
+					continue
+				}
+
+				log.Printf("Worker %d: Successfully analyzed and saved issue %s", workerID, issue.Key)
+			}
+		}(i)
+	}
+
+	// 发送任务到通道
 	for _, issue := range issues {
-		existing, err := repo.FindByJiraKey(issue.Key)
-		if err == nil && existing != nil {
-			fmt.Printf("issue %s already exists\n", issue.Key)
-			continue
-		}
+		taskChan <- issue
+	}
+	close(taskChan)
 
-		log.Printf("Analyzing issue %s", issue.Key)
+	// 等待所有worker完成
+	wg.Wait()
+	close(errChan)
 
-		analysis, err := analyzer.AnalyzeIssue(ctx, &issue)
+	// 收集并处理错误
+	var errors []error
+	for err := range errChan {
+		errors = append(errors, err)
+	}
 
-		// 补充其他维度的字段
-
-		if err != nil {
-			log.Printf("Failed to analyze issue %s: %v", issue.Key, err)
-			continue
-		}
-
-		dbAnalysis := &database.ConsumerIssue{
-			JiraURL:              cfg.Jira.URL + "/browse/" + issue.Key, // 链接
-			JiraKey:              issue.Key,                             // 工单号
-			IssueTitle:           issue.Title,                           // 工单标题
-			ResponsibleDev:       issue.Dev,                             // 开发负责人
-			ResponsibleQA:        issue.QA,                              // 测试负责人
-			ModuleCategory:       analysis.ModuleCategory,               // 模块分类
-			SymptomCategory:      analysis.SymptomCategory,              // 症状分类
-			SymptomDescription:   analysis.SymptomDescription,           // 症状描述
-			RootCauseCategory:    analysis.RootCauseCategory,            // 根因分类
-			RootCauseDescription: analysis.RootCauseDescription,         // 根因描述
-			SolutionCategory:     analysis.SolutionCategory,             // 解决方案分类
-			SolutionDescription:  analysis.SolutionDescription,          // 解决方案描述
-			IsClosed:             analysis.IsClosed,                     // 是否关闭
-			IsFixed:              analysis.IsFixed,                      // 是否修复
-			DefectType:           analysis.DefectType,                   // 缺陷类型
-			TechnicalDebtDesc:    analysis.TechnicalDebtDesc,            // 技术债务描述
-			IndustrySolution:     analysis.IndustrySolution,             // 行业解决方案
-			GapAnalysis:          analysis.GapAnalysis,                  // 差距分析
-			OriginalDescription:  issue.Description,                     // 原始描述
-			OriginalComments:     strings.Join(issue.Comments, "\n"),    // 原始评论
-			OriginalWorkLogs:     strings.Join(issue.WorkLogs, "\n"),    // 原始工作日志
-		}
-
-		if err := repo.CreateOrUpdate(dbAnalysis); err != nil {
-			log.Printf("Failed to save analysis for issue %s: %v", issue.Key, err)
-			continue
-		}
-
-		log.Printf("Successfully analyzed and saved issue %s", issue.Key)
+	// 如果有错误，返回第一个错误
+	if len(errors) > 0 {
+		return fmt.Errorf("encountered %d errors during processing, first error: %v", len(errors), errors[0])
 	}
 
 	return nil
